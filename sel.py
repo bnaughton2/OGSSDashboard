@@ -4,9 +4,15 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 import time
 import locale
+from datetime import datetime, timedelta
+import mysql.connector
+import pytz
 
 options = webdriver.ChromeOptions()
 options.add_experimental_option('excludeSwitches', ['enable-logging'])
+options.add_argument('--headless')
+options.add_argument("--window-size=1920,1080")
+options.add_argument("--start-maximized")
 driver = webdriver.Chrome(options=options)
 locale.setlocale(locale.LC_ALL, '')
 
@@ -25,6 +31,14 @@ def parseMonthlyData(string):
         d[arr[0]] = float(locale.atof(arr[1].strip('$')))
     return d
 
+def formatDate(string):
+    local = pytz.timezone('America/New_York')
+    naive = datetime.strptime(string+"  06:00:00", '%m/%d/%Y %H:%M:%S')
+    local_dt = local.localize(naive, is_dst=None)
+    utc_dt = local_dt.astimezone(pytz.utc)
+    date = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+    return date
+
 def openKPIDashboard(driver):
     driver.get("https://sscsta.sscsinc.com/Auth.App/#/login?returnUrl=%2FCStore.Web%2FAccount%2FLogin%3FreturnUrl%3D%252FCStore.Web%252FHome%252FIndex")
     # driver.get("https://sscsta.sscsinc.com/TransactionAnalysis.App/#!/fuelsales/?startDate=20230926000000&endDate=20230926235959&selectedSites=007151001&salestype=Amount&totaltype=Day&autosubmit=true")
@@ -38,37 +52,66 @@ def openKPIDashboard(driver):
     button.click()
     dashboard = driver.find_element(By.CSS_SELECTOR, '#desktop-module-menu .fade-selection-animation:nth-child(3) > a')
     dashboard.send_keys('\n')
-    time.sleep(7)
+    time.sleep(5)
     kpi = driver.find_element(By.LINK_TEXT, 'KPI Dashboard Info')
     kpi.send_keys('\n')
     kpi = driver.find_element(By.LINK_TEXT, '(Default)')
     kpi.send_keys('\n')
     kpi = driver.find_element(By.LINK_TEXT, 'KPI Dashboard Info')
     kpi.send_keys('\n')
-    time.sleep(5)
+    time.sleep(3)
     return driver
 
 def getDailyFuelVolume():
+    volumeVal = 0
+    dateVal = ''
     window = openKPIDashboard(driver)
     report = window.find_element(By.XPATH, '//div[@id="7515da8f-90c4-456a-b39e-402665a30759"]/div[2]/div[2]/div/div/a/span[2]')
     report.click()
     grid = window.find_element(By.LINK_TEXT, 'Grid')
     grid.click()
-    volume = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-    date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-    print(date.text)
-    print(float(locale.atof(volume.text)))
+    try:
+        volume = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+        volumeVal = float(locale.atof(volume.text))
+        dateVal = formatDate(date.text)
+    except BaseException as error:
+        print("No daily fuel volume data available.")
+    return [volumeVal, dateVal]
 
 def getDailyFuelSales():
+    salesVal = 0
+    dateVal = ''
     window = openKPIDashboard(driver)
     report = window.find_element(By.XPATH, '//div[@id="706da4e9-5865-452a-a7c3-aae010996c20"]/div[2]/div[2]/div/div/a/span[2]')
     report.click()
     grid = window.find_element(By.LINK_TEXT, 'Grid')
     grid.click()
-    sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-    date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-    print(date.text)
-    print(float(locale.atof(sales.text[1:])))
+    try:
+        sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+        salesVal = float(locale.atof(sales.text.strip('$')))
+        dateVal = formatDate(date.text)
+    except BaseException as error:
+        print("No daily fuel sales data available.")
+    return [salesVal, dateVal]
+
+def getDailyStoreSales():
+    salesVal = 0
+    dateVal = ''
+    window = openKPIDashboard(driver)
+    report = window.find_element(By.XPATH, '//div[@id="b197098d-e7ea-4f57-923f-dba5f9b71b2b"]/div[2]/div[2]/div/div/a/span[2]')
+    report.click()
+    grid = window.find_element(By.LINK_TEXT, 'Grid')
+    grid.click()
+    try:
+        sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+        sales = float(locale.atof(sales.text.strip('$')))
+        date = formatDate(date.text)
+    except BaseException as error:
+        print("No daily store sales data available.")
+    return [salesVal, dateVal]
 
 def getMonthlyFuelSales():
     window = openKPIDashboard(driver)
@@ -79,7 +122,7 @@ def getMonthlyFuelSales():
     txt = ''
     while txt == '':
         sales = window.find_element(By.XPATH, '//div[contains(@id,"DataTables_Table")]/div[2]/div[2]/table')
-        txt = sakes.text
+        txt = sales.text
     print(parseMonthlyData(sales.text))
 
 def getMonthlyFuelVolume():
@@ -88,35 +131,15 @@ def getMonthlyFuelVolume():
     report.click()
     grid = window.find_element(By.LINK_TEXT, 'Grid')
     grid.click()
-    # time.sleep(1)
     txt = ''
     while txt == '':
         volume = window.find_element(By.XPATH, '//div[contains(@id,"DataTables_Table")]/div[2]/div[2]/table')
         txt = volume.text
     print(parseMonthlyData(volume.text))
 
-def getDailyStoreSales():
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="b197098d-e7ea-4f57-923f-dba5f9b71b2b"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
-    sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-    date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-    print(date.text)
-    print(float(locale.atof(sales.text[1:])))
 
-
-def openFuelSales(driver):
-    pass
-    # fuel = driver.find_element('xpath', '//*[@id="desktop-module-menu"]/div/ul/li[8]/a')
-    # fuel.send_keys('\n')
-    # time.sleep(3)
-    # host = driver.find_element('xpath', '//*[@id="page-wrapper"]/div[2]/div[2]/div/div[2]/ss-report/div/div/div/ul/li/form/ss-criteria-set/div[1]/ss-site-picker/div/wc-sitepicker')
-    # shadowRoot = driver.execute_script('return arguments[0].shadowRoot', host)
-    # btn = shadowRoot.find_element(By.CLASS_NAME, 'input-group-btn > button')
-    # btn.click()
-    # //*[contains(@id,"component_wc_app_sitepciker")]/ss-site-picker/ss-site-picker-dlg/div/span/button
-getDailyStoreSales()
+print(getDailyStoreSales())
+print(getDailyFuelSales())
+print(getDailyFuelVolume())
 while True:
     pass
