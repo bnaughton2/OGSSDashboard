@@ -4,9 +4,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 import time
 import locale
-from datetime import datetime, timedelta
-import mysql.connector
+from datetime import datetime, timedelta, date
 import pytz
+from mySQLDB import *
 
 options = webdriver.ChromeOptions()
 options.add_experimental_option('excludeSwitches', ['enable-logging'])
@@ -14,6 +14,8 @@ options.add_argument('--headless')
 options.add_argument("--window-size=1920,1080")
 options.add_argument("--start-maximized")
 driver = webdriver.Chrome(options=options)
+tz_params = {'timezoneId': 'America/New_York'}
+driver.execute_cdp_cmd('Emulation.setTimezoneOverride', tz_params)
 locale.setlocale(locale.LC_ALL, '')
 
 
@@ -50,96 +52,121 @@ def openKPIDashboard(driver):
     password.send_keys('Camera1$')
     button = driver.find_element('xpath', '//*[@id="page-wrapper"]/div/div/div/div[2]/div/div[2]/div[1]/form/button')
     button.click()
-    dashboard = driver.find_element(By.CSS_SELECTOR, '#desktop-module-menu .fade-selection-animation:nth-child(3) > a')
+    dashboard = driver.find_element(By.XPATH, '//div[@id="desktop-module-menu"]/div/ul/li[3]/a')
     dashboard.send_keys('\n')
-    time.sleep(5)
+    time.sleep(8)
     kpi = driver.find_element(By.LINK_TEXT, 'KPI Dashboard Info')
     kpi.send_keys('\n')
     kpi = driver.find_element(By.LINK_TEXT, '(Default)')
     kpi.send_keys('\n')
     kpi = driver.find_element(By.LINK_TEXT, 'KPI Dashboard Info')
     kpi.send_keys('\n')
-    time.sleep(3)
+    time.sleep(5)
     return driver
 
 def getDailyFuelVolume():
     volumeVal = 0
     dateVal = ''
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="7515da8f-90c4-456a-b39e-402665a30759"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
     try:
-        volume = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-        volumeVal = float(locale.atof(volume.text))
-        dateVal = formatDate(date.text)
+        window = openKPIDashboard(driver)
+        report = window.find_element(By.XPATH, '//div[@id="7515da8f-90c4-456a-b39e-402665a30759"]/div[2]/div[2]/div/div/a/span[2]')
+        report.click()
+        grid = window.find_element(By.LINK_TEXT, 'Grid')
+        grid.click()
     except BaseException as error:
-        print("No daily fuel volume data available.")
+        print("Failure to open daily volume data: " + str(error))
+    else:
+        try:
+            volume = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+            date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+            volumeVal = float(volume.text.replace(',', ''))
+            dateVal = formatDate(date.text)
+        except BaseException as error:
+            print("No daily fuel volume data available: "  + str(error))
     return [volumeVal, dateVal]
 
 def getDailyFuelSales():
     salesVal = 0
     dateVal = ''
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="706da4e9-5865-452a-a7c3-aae010996c20"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
     try:
-        sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-        salesVal = float(locale.atof(sales.text.strip('$')))
-        dateVal = formatDate(date.text)
+        window = openKPIDashboard(driver)
+        report = window.find_element(By.XPATH, '//div[@id="706da4e9-5865-452a-a7c3-aae010996c20"]/div[2]/div[2]/div/div/a/span[2]')
+        report.click()
+        grid = window.find_element(By.LINK_TEXT, 'Grid')
+        grid.click()
     except BaseException as error:
-        print("No daily fuel sales data available.")
+        print("Failure to open daily sales data: " + str(error))
+    else:
+        try:
+            sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+            date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+            salesVal = float(sales.text.strip('$').replace(',', ''))
+            dateVal = formatDate(date.text)
+        except BaseException as error:
+            print("No daily fuel sales data available: " + str(error))
     return [salesVal, dateVal]
 
 def getDailyStoreSales():
     salesVal = 0
     dateVal = ''
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="b197098d-e7ea-4f57-923f-dba5f9b71b2b"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
     try:
-        sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
-        date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
-        sales = float(locale.atof(sales.text.strip('$')))
-        date = formatDate(date.text)
+        window = openKPIDashboard(driver)
+        report = window.find_element(By.XPATH, '//div[@id="b197098d-e7ea-4f57-923f-dba5f9b71b2b"]/div[2]/div[2]/div/div/a/span[2]')
+        report.click()
+        grid = window.find_element(By.LINK_TEXT, 'Grid')
+        grid.click()
     except BaseException as error:
-        print("No daily store sales data available.")
+        print("Failure to open daily store data: " + str(error))
+    else:
+        try:
+            sales = window.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight')
+            date = window.find_element(By.CSS_SELECTOR, '.sorting_1')
+            salesVal = float(sales.text.strip('$').replace(',', ''))
+            dateVal = formatDate(date.text)
+        except BaseException as error:
+            print("No daily store sales data available: " + str(error))
     return [salesVal, dateVal]
 
-def getMonthlyFuelSales():
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="d1648a60-bdcf-4525-87e7-4226dbe224f0"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
-    txt = ''
-    while txt == '':
-        sales = window.find_element(By.XPATH, '//div[contains(@id,"DataTables_Table")]/div[2]/div[2]/table')
-        txt = sales.text
-    print(parseMonthlyData(sales.text))
+def getStoreData():
+    vals = [-1,-1]
+    try:
+        driver.get("https://www.syftanalytics.com/embed/33ff3d0d-4066-4e4a-960b-a0010f6bd7bb")
+        driver.maximize_window()
+        time.sleep(10)
+        members = driver.find_element('xpath', '//*[@id="number-card-0"]/div[2]/div/div[2]')
+        vals[0] = int(float(members.get_attribute('innerHTML')))
+        sales = driver.find_element('xpath', '//*[@id="dashboard-graph-heading-2"]/div[2]/div[1]')
+        vals[1] = float(sales.get_attribute('innerHTML').strip("$"))
+    except BaseException as error:
+        print("Error retrieving store members/sales: " + str(error))
+    return vals
 
-def getMonthlyFuelVolume():
-    window = openKPIDashboard(driver)
-    report = window.find_element(By.XPATH, '//div[@id="9ea7687d-5a89-435c-9916-1549d03ee223"]/div[2]/div[2]/div/div/a/span[2]')
-    report.click()
-    grid = window.find_element(By.LINK_TEXT, 'Grid')
-    grid.click()
-    txt = ''
-    while txt == '':
-        volume = window.find_element(By.XPATH, '//div[contains(@id,"DataTables_Table")]/div[2]/div[2]/table')
-        txt = volume.text
-    print(parseMonthlyData(volume.text))
+def main():
+    try:
+        dbObj = DB()
+        time = datetime.now()
+        print("Start Time: "+ time.strftime('%Y-%m-%d %H:%M:%S'))
+        store = getDailyStoreSales()
+        fuelSales = getDailyFuelSales()
+        fuelVol = getDailyFuelVolume()
+        storeData = getStoreData()
+        if(fuelSales[0] != 0 and fuelSales[1] != '') and (fuelVol[0] != 0 and fuelVol[1] != ''):
+            if(fuelSales[1] == fuelVol[1]):
+                data = [fuelSales[0], fuelVol[0]]
+                date = fuelSales[1]
+                dbObj.upsertFuelSalesData(data, date)
+        if(store[0] != 0 and store[1] != '')  and (storeData[0] != -1 and storeData[1] != -1):
+            data = [store[0], storeData[0], storeData[1]]
+            date = store[1]
+            print(data)
+            dbObj.upsertStoreSalesData(store[0], date)
+            dbObj.updateStoreMembersData([storeData[0], storeData[1]], date)
+    except:
+        print("Something went wrong in sel.py")
+    finally:
+        dbObj.closeDB()
+        driver.quit()
 
 
-print(getDailyStoreSales())
-print(getDailyFuelSales())
-print(getDailyFuelVolume())
-while True:
-    pass
+if __name__ == "__main__":
+    main()

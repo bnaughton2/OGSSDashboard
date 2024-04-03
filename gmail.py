@@ -11,17 +11,42 @@ import logging
 import requests
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 import locale
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from dateutil import tz
 import mysql.connector
+import uuid
+import pytz
+import io
+import pandas as pd
+import dbcreds as creds
+from mySQLDB import *
+import json
+from lxml import etree
+import csv
 
-SCOPES = ['https://mail.google.com/']
+SCOPES = ['https://mail.google.com/', "https://www.googleapis.com/auth/spreadsheets.readonly"]
 locale.setlocale(locale.LC_ALL, '')
+
+
+def replaceCommas(string, char):
+    inQuotes = False
+    out = ''
+    for y in string:
+        if y == '"' and (inQuotes == False):
+            inQuotes = True
+        elif y == '"' and (inQuotes == True):
+            inQuotes = False
+        elif y == ',' and inQuotes == False:
+            out = out+char
+        else:
+            out = out+y
+    return out
 
 def formatCurrency(string):
     if string.strip('"') == '':
         return 0.0
     else:
-        return float(locale.atof(string.strip('"').strip('$')))
+        return float(string.strip('"').strip('$').replace(',',''))
 
 def formatPercent(string):
     if string.strip('"') == '':
@@ -30,11 +55,11 @@ def formatPercent(string):
         tmp = string.strip('"').strip('%')
         return float(tmp) / 100
 
-def formatNumber(string):
+def formatWholeNumber(string):
     if string.strip('"') == '':
         return 0
     else:
-        tmp = string.strip('"')
+        tmp = string.strip('"').replace(',','')
         return int(tmp)
 
 def formatString(string):
@@ -44,17 +69,40 @@ def formatString(string):
         tmp = string.strip('"')
         return str(tmp)
 
-def formatDateTime(string):
-    date = string[:25]
+def formatConnectTeamDateTime(string):
+    date = string[:-6]
     date = datetime.strptime(date, '%a, %d %b %Y %H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
     return date
 
-def formatDailyOilDateTime(string):
-    date = string[:25]
-    print(date)
+def formatVendingDate(string):
+    tmp = string[:-6]
+    from_zone = tz.gettz('UTC')
+    to_zone = tz.gettz('America/New_York')
+    utc = datetime.strptime(tmp, '%d %b %Y %H:%M:%S')
+    utc = utc.replace(tzinfo=from_zone)
+    local = utc.astimezone(to_zone)
+    date = local.strftime('%Y-%m-%d %H:%M:%S')
+    return date
+
+def formatISIDate(string):
+    tmp = string[:-12]
+    local = pytz.timezone('America/Los_Angeles')
+    naive = datetime.strptime(tmp, '%a, %d %b %Y %H:%M:%S')
+    local_dt = local.localize(naive, is_dst=None)
+    utc_dt = local_dt.astimezone(pytz.utc)
+    date = utc_dt.strftime('%Y-%m-%d')
+    return date
+
+def formatWashconnectDate(string):
+    tmp = string[:-6]
+    date = datetime.strptime(tmp, '%d %b %Y %H:%M:%S').strftime('%Y-%m-%d %H')
+    return date
+
+def formatDailyOilDate(string):
+    date = string[:-12]
     date = datetime.strptime(date, '%a, %d %b %Y %H:%M:%S')
     date = date - timedelta(days=1)
-    date = date.strftime('%Y-%m-%d %H:%M:%S')
+    date = date.strftime('%Y-%m-%d')
     return date
 
 def formatRealTimeOilData(string):
@@ -63,23 +111,50 @@ def formatRealTimeOilData(string):
     storeAlias = formatString(linesSplit[1])
     if storeAlias == 'New England Service Corp. #1 2577':
         grossSales = formatCurrency(linesSplit[4])
-        promotions = formatCurrency(linesSplit[7])
+        promotionAmount = formatCurrency(linesSplit[7])
         #grossSales - Promotions = NetSales
-        return grossSales
+        return [grossSales, promotionAmount]
     else:
         return "Invalid Email Data"
 
 def formatDailyOilData(string):
     lines = string.decode('UTF-8')
     linesSplit = lines.split('\n')[2].split('\t')
-    invoiceCount = formatNumber(linesSplit[1])
+    invoiceCount = formatWholeNumber(linesSplit[1])
     grossAmount = formatCurrency(linesSplit[2])
     promotionAmount = formatCurrency(linesSplit[10])
     cogs = formatCurrency(linesSplit[7])
     marginPercent = formatPercent(linesSplit[9])
     netMargin = formatCurrency(linesSplit[8])
-    out = [netMargin, marginPercent]
+    out = [invoiceCount, grossAmount, promotionAmount, cogs, marginPercent, netMargin]
     return out
+
+def formatClubSummaryData(string):
+    lines = string.decode('UTF-8')
+    linesSplit = replaceCommas(lines, '\t').split('\r\n')
+    arr = []
+    for r in linesSplit:
+        arr.append(r.split('\t'))
+    ind = None
+    for x in arr:
+        for i,j in enumerate(x):
+            if j == 'Textbox76':
+                ind = i
+        if ind is not None:
+            return formatWholeNumber(arr[1][ind]) 
+    return -1
+
+def formatShiftRegisterData(string):
+    lines = string.decode('UTF-8')
+    linesSplit = replaceCommas(lines, '\t').split('\r\n')
+    arr = []
+    for r in linesSplit:
+        arr.append(r.split('\t'))
+    totalWashSales = ''
+    for i,x in enumerate(arr):
+        if x[0] == 'Total Sales:':
+            return formatCurrency(x[1])
+    return -1
 
 def getValueFromEmailData(emailData, value):
     out = ''
@@ -93,7 +168,9 @@ def readEmails():
     """Shows basic usage of the Gmail API.
     Lists the user's Gmail labels.
     """
+    dbObj = DB()
     creds = None
+    wash = [[-1, None], [-1, None]]
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
@@ -122,7 +199,6 @@ def readEmails():
             message_count = 0
             for message in messages:
                 msg = service.users().messages().get(userId='me', id=message['id']).execute()
-                # delete = service.users().messages().delete(userId='me', id=message['id']).execute()
                 email_data = msg['payload']['headers']
                 for values in email_data:
                     value = values['name']
@@ -130,54 +206,167 @@ def readEmails():
                     if value == 'Subject':
                         if values['value'] == 'Real-Time Oil Sales':
                             try:
-                                attachment_id = msg['payload']['parts'][1]['body']['attachmentId']
+                                attachment_id = msg['payload']['parts'][-1]['body']['attachmentId']
                                 attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
                                 data = attachment.get("data")
-                                date = getValueFromEmailData(email_data, 'Date')
-                                date = formatDateTime(date)
+                                data = formatRealTimeOilData(urlsafe_b64decode(data))
+                                date = formatISIDate(getValueFromEmailData(email_data, 'Date'))
                                 #insert data into database
-                                #delete email
-                                # msg = service.users().messages().delete(userId='me', id=message['id']).execute()
-                                print(formatRealTimeOilData(urlsafe_b64decode(data)))
+                                if data != "Invalid Email Data":
+                                    dbObj.upsertRealTimeOilData(data, date)
+                                #Set Email as read and then move to trash
+                                msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                msg = service.users().messages().trash(userId='me', id=message['id']).execute()
                             except BaseException as error:
-                                print(error)
+                                print("Real Time Oil: " + str(error))
                                 #email error to notify issue
-                        if values['value'] == 'Daily Oil Report':
+                    elif value == 'From':
+                        if values['value'] == 'noreply@eposnow.com':
+                            try:
+                                date = formatConnectTeamDateTime(getValueFromEmailData(email_data, 'Date'))
+                                subject = getValueFromEmailData(email_data, 'Subject')
+                                if "Lottery Sales" in subject:
+                                    body = msg['payload']['parts'][0]['body']['data']
+                                    data = base64.urlsafe_b64decode(body.encode('UTF-8'))
+                                    tables = pd.read_html(data)
+                                    table = tables[0]
+                                    saleArr = table[table[0].str.contains('Total Sales', na=False)].head(1)[0].item()
+                                    saleArr = saleArr.split()
+                                    lottoSales = formatCurrency(saleArr[2])
+                                    dbObj.updateLotterySales(lottoSales, date)
+                                    msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                    msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                                else:
+                                    body = msg['payload']['parts'][0]['body']['data']
+                                    data = base64.urlsafe_b64decode(body.encode('UTF-8'))
+                                    tables = pd.read_html(data)
+                                    table = tables[0]
+                                    print(table)
+                            except BaseException as error:
+                                print("Error in lottery insert: " + str(error))
+                        elif values['value'] == 'notifier@nayax.com':
+                            try:
+                                date = formatVendingDate(getValueFromEmailData(email_data, 'Date'))
+                                attachment_id = msg['payload']['parts'][-1]['body']['attachmentId']  
+                                attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
+                                data = attachment.get("data")
+                                data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                tables = pd.read_html(data) 
+                                table = tables[0]
+                                sales = table.tail(1)["Today's Credit Card Sales"].item()
+                                vends = table.tail(1)["Today's Credit Card Vends"].item()
+                                totalSales = sales + vends
+                                dbObj.updateVendingSales(totalSales, date)
+                                msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                            except BaseException as error:
+                                print("Error in vacuum/vending insert: " + str(error))
+                        elif values['value'] == 'data@fastcw.com':
                             try:
                                 attachment_id = msg['payload']['parts'][1]['body']['attachmentId']
                                 attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
                                 data = attachment.get("data")
-                                date = getValueFromEmailData(email_data, 'Date')
-                                date = formatDailyOilDateTime(date)
-                                print(date)
-                                #insert data into database
-                                #delete email
-                                # msg = service.users().messages().delete(userId='me', id=message['id']).execute()
-                                print(formatDailyOilData(urlsafe_b64decode(data)))
+                                data = urlsafe_b64decode(data)
+                                json_data = json.loads(data)
+                                alerts = json_data['Alerts']
+                                for i in alerts:
+                                    dbObj.insertWaitTimeData(i)
+                                msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                msg = service.users().messages().trash(userId='me', id=message['id']).execute()
                             except BaseException as error:
-                                print(error)
-                                #email error to notify issue
-                            
-                    elif value == 'From':
-                        try:
-                            if values['value'] == 'Old Greenwich Service Station App <noreply@reports.connecteam.com>':
-                                date = getValueFromEmailData(email_data, 'Date')
-                                subject = getValueFromEmailData(email_data, 'Subject')
+                                print("Error in wait time insert: " + str(error))
+                        elif values['value'] == 'Old Greenwich Service Station App <noreply@reports.connecteam.com>':
+                            date = getValueFromEmailData(email_data, 'Date')
+                            subject = getValueFromEmailData(email_data, 'Subject')
+                            body = getValueFromEmailData(email_data, 'Body')
+                            if "Emmissions Daily Paperwork" in subject:
+                                try:
+                                    date = formatConnectTeamDateTime(getValueFromEmailData(email_data, 'Date'))
+                                    attachment_id = msg['payload']['parts'][-1]['body']['attachmentId'] 
+                                    attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
+                                    data = attachment.get("data")
+                                    data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                    tables = pd.read_excel(io.BytesIO(data)) 
+                                    emmissionsDone = tables['How Many Emmissions were preformed today?'].item()
+                                    vinChecksDone = tables['How many VIN checks today?'].item()
+                                    dbObj.updateEmmissionsDone(emmissionsDone, date)
+                                    dbObj.updateVinChecksDone(vinChecksDone, date)
+                                    msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                    msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                                except BaseException as error:
+                                    print("Error inserting Emissions data: " + str(error))
+                            else:
                                 arr = subject.split(' completed ')
-                                person = arr[0]
-                                fullTask = arr[1]
-                                action = fullTask.split()[:2]
-                                date = formatDateTime(date)
-                                #insert data into database
-                                #delete email
-                                print(person)
-                                print(fullTask)
-                                print(action)
-                                print(date)
+                                if arr[1] != "Payout Damage Form":
+                                    try:
+                                        data = [arr[0], arr[1], arr[1].split()[:2]]
+                                        date = formatConnectTeamDateTime(date)
+                                        #insert data into database
+                                        dbObj.insertConnectTeamData(data, date)
+                                        #Set Email as read and then move to trash
+                                        msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                        msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                                    except BaseException as error:
+                                        print("Error inserting ConnectTeam data: " + str(error))
+                                else:
+                                    pass
+                                    # try:
+                                    #     # print(base64.urlsafe_b64decode(msg['payload']['body']['data']).decode("utf-8"))
+                                    #     data = msg['payload']['body']['data']
+                                    #     data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                    #     tables = pd.read_html(data)
+                                    #     for table in tables:
+                                    #         saleArr = table[table[0].str.contains('Which Department is Responsible?', na=False)]
+                                    #     print(saleArr)
+                                    #     # print(tables[-22:])
+                                    # except BaseException as error:
+                                    #     print("Error inserting Damage data: " + str(error))
+                        elif values['value'] == 'MyReports@washconnect.com':
+                            date = getValueFromEmailData(email_data, 'Date')
+                            subject = getValueFromEmailData(email_data, 'Subject')
+                            try:
+                                if "ClubSummary was executed at" in subject:
+                                    attachment_id = msg['payload']['parts'][1]['parts'][0]['body']['attachmentId']
+                                    attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
+                                    data = attachment.get("data")
+                                    data = formatClubSummaryData(urlsafe_b64decode(data))
+                                    wash[0] = [data, formatWashconnectDate(date)]
+                                    #Set Email as read and then move to trash
+                                    msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                    msg = service.users().messages().trash(userId='me', id=message['id']).execute()
 
-                        except BaseException as error:
-                            print(error)
+                                if "Shift Register Cube was executed at" in subject:
+                                    attachment_id = msg['payload']['parts'][1]['parts'][0]['body']['attachmentId']
+                                    attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
+                                    data = attachment.get("data")
+                                    # data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                    # print(data)
+                                    # tables = pd.read_csv(io.BytesIO(data), sep=',', encoding='utf-8', on_bad_lines='skip', quoting=csv.QUOTE_NONE, quotechar='"') 
+                                    # print(tables)
+                                    data = formatShiftRegisterData(urlsafe_b64decode(data))
+                                    wash[1] = [data, formatWashconnectDate(date)]
+                                    #Set Email as read and then move to trash
+                                    msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                    msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                                if((wash[0][0] != -1 and wash[1][0] != -1) and (wash[0][1] is not None and wash[1][1] is not None) and (wash[0][1] == wash[1][1])):
+                                    #Upsert into DB
+                                    # pass
+                                    dbObj.upsertCarwashData([wash[0][0], wash[1][0]], wash[0][1])
+                            except BaseException as error:
+                                print("Error inserting Car wash data: " + str(error))
+                        elif values['value'] == '"admin@rsmgt.net" <admin@rsmgt.net>':
+                            date = getValueFromEmailData(email_data, 'Date')
+                            subject = getValueFromEmailData(email_data, 'Subject')
+                            try:
+                                data = formatCurrency(subject)
+                                dbObj.insertPayrollData(data)
+                                #Set Email as read and then move to trash
+                                msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                            except BaseException as error:
+                                print("Payroll/Admin@rsmgt.net: " + str(error))
     except Exception as error:
         print(f'An error occurred: {error}')
+    dbObj.closeDB()
 
 readEmails()
