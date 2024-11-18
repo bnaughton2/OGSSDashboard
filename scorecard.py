@@ -40,7 +40,7 @@ try:
 
     sheet = service.spreadsheets()
     result = sheet.values().batchGet(spreadsheetId=spreadsheet_id,
-                                ranges=['KPI Dashboard!C9', 'KPI Dashboard!C11', 'KPI Dashboard!C15', 'KPI Dashboard!C17', 'KPI Dashboard!E9', 'KPI Dashboard!E11', 'KPI Dashboard!E15', 'KPI Dashboard!E17']).execute()
+                                ranges=['KPI Dashboard!C9', 'KPI Dashboard!C10', 'KPI Dashboard!C11', 'KPI Dashboard!C15', 'KPI Dashboard!C16', 'KPI Dashboard!C17', 'KPI Dashboard!E9', 'KPI Dashboard!E10', 'KPI Dashboard!E11', 'KPI Dashboard!E15', 'KPI Dashboard!E16', 'KPI Dashboard!E17']).execute()
     valueRanges = result.get('valueRanges', [])
 
     if not valueRanges:

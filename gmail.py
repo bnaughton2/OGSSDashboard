@@ -18,11 +18,13 @@ import uuid
 import pytz
 import io
 import pandas as pd
+import numpy as np
 import dbcreds as creds
 from mySQLDB import *
 import json
 from lxml import etree
 import csv
+import unidecode
 
 SCOPES = ['https://mail.google.com/', "https://www.googleapis.com/auth/spreadsheets.readonly"]
 locale.setlocale(locale.LC_ALL, '')
@@ -88,14 +90,20 @@ def formatISIDate(string):
     tmp = string[:-12]
     local = pytz.timezone('America/Los_Angeles')
     naive = datetime.strptime(tmp, '%a, %d %b %Y %H:%M:%S')
+    print(f"Naive: {naive}")
     local_dt = local.localize(naive, is_dst=None)
     utc_dt = local_dt.astimezone(pytz.utc)
-    date = utc_dt.strftime('%Y-%m-%d')
+    date = naive.strftime('%Y-%m-%d')
     return date
 
 def formatWashconnectDate(string):
     tmp = string[:-6]
-    date = datetime.strptime(tmp, '%d %b %Y %H:%M:%S').strftime('%Y-%m-%d %H')
+    from_zone = tz.gettz('UTC')
+    to_zone = tz.gettz('America/New_York')
+    utc = datetime.strptime(tmp, '%a, %d %b %Y %H:%M:%S')
+    utc = utc.replace(tzinfo=from_zone)
+    local = utc.astimezone(to_zone)
+    date = local.strftime('%Y-%m-%d %H')
     return date
 
 def formatDailyOilDate(string):
@@ -164,13 +172,26 @@ def getValueFromEmailData(emailData, value):
             out = x['value']
     return out
 
+def getValueFromDF(df, string, colNum, cast, step=1):
+    out = 0
+    columnSeriesObj = df.iloc[:, colNum]
+    nextObj = df.iloc[:, colNum+step]
+    for idx, val in np.ndenumerate(columnSeriesObj.values):
+        if val == string:
+            out = nextObj.values[idx[0]]
+            # print(f"{idx[0]}: {val} | Next: {out}")
+            break
+    if type(out) == str:
+        out = out.replace(",", "").strip('()').strip('$')
+    return cast(out)
+
 def readEmails():
     """Shows basic usage of the Gmail API.
     Lists the user's Gmail labels.
     """
     dbObj = DB()
     creds = None
-    wash = [[-1, None], [-1, None]]
+    wash = {}
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
@@ -241,7 +262,6 @@ def readEmails():
                                     data = base64.urlsafe_b64decode(body.encode('UTF-8'))
                                     tables = pd.read_html(data)
                                     table = tables[0]
-                                    print(table)
                             except BaseException as error:
                                 print("Error in lottery insert: " + str(error))
                         elif values['value'] == 'notifier@nayax.com':
@@ -287,8 +307,8 @@ def readEmails():
                                     data = attachment.get("data")
                                     data = base64.urlsafe_b64decode(data.encode('UTF-8'))
                                     tables = pd.read_excel(io.BytesIO(data)) 
-                                    emmissionsDone = tables['How Many Emmissions were preformed today?'].item()
-                                    vinChecksDone = tables['How many VIN checks today?'].item()
+                                    emmissionsDone = tables['How Many Emmissions were preformed today?'][0].item()
+                                    vinChecksDone = tables['How many VIN checks today?'][0].item()
                                     dbObj.updateEmmissionsDone(emmissionsDone, date)
                                     dbObj.updateVinChecksDone(vinChecksDone, date)
                                     msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
@@ -297,9 +317,32 @@ def readEmails():
                                     print("Error inserting Emissions data: " + str(error))
                             else:
                                 arr = subject.split(' completed ')
-                                if arr[1] != "Payout Damage Form":
+                                if subject == "Old Greenwich Service Station's daily report for Bought/Returned Credit Card Form - Auto report":
+                                    # print(msg['payload'])
                                     try:
-                                        data = [arr[0], arr[1], arr[1].split()[:2]]
+                                        attachment_id = msg['payload']['parts'][-1]['body']['attachmentId']
+                                        attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
+                                        data = attachment.get("data")
+                                        data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                        tables = pd.read_excel(io.BytesIO(data))
+                                        date = tables['Submission Date'][0]
+                                        if 'Which department are you?' in tables.columns:
+                                            dept = tables['Which department are you?'][0]
+                                        else:
+                                            dept = tables['Which department / Site are you?'][0]
+                                        amount = tables['Total Amount:'][0]
+                                        data = {"dept": str(dept), "amount": float(amount)}
+                                        dbObj.insertDamageData(data, str(date))
+                                        msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
+                                        msg = service.users().messages().trash(userId='me', id=message['id']).execute()
+                                    except BaseException as error:
+                                        print("Error inserting Damagages data: " + str(error))
+                                else:
+                                    try:
+                                        if(arr[1] == 'Check-Ins' or arr[1] == 'Check-Ins '):
+                                            data = [unidecode.unidecode(arr[0]), arr[1], arr[1]]
+                                        else:
+                                            data = [unidecode.unidecode(arr[0]), arr[1], arr[1].split()[:2]]
                                         date = formatConnectTeamDateTime(date)
                                         #insert data into database
                                         dbObj.insertConnectTeamData(data, date)
@@ -308,20 +351,8 @@ def readEmails():
                                         msg = service.users().messages().trash(userId='me', id=message['id']).execute()
                                     except BaseException as error:
                                         print("Error inserting ConnectTeam data: " + str(error))
-                                else:
-                                    pass
-                                    # try:
-                                    #     # print(base64.urlsafe_b64decode(msg['payload']['body']['data']).decode("utf-8"))
-                                    #     data = msg['payload']['body']['data']
-                                    #     data = base64.urlsafe_b64decode(data.encode('UTF-8'))
-                                    #     tables = pd.read_html(data)
-                                    #     for table in tables:
-                                    #         saleArr = table[table[0].str.contains('Which Department is Responsible?', na=False)]
-                                    #     print(saleArr)
-                                    #     # print(tables[-22:])
-                                    # except BaseException as error:
-                                    #     print("Error inserting Damage data: " + str(error))
-                        elif values['value'] == 'MyReports@washconnect.com':
+                                    
+                        elif values['value'] == 'MyReports@washconnect.com' or values['value'] == 'MyReports@washac1.com':
                             date = getValueFromEmailData(email_data, 'Date')
                             subject = getValueFromEmailData(email_data, 'Subject')
                             try:
@@ -329,29 +360,34 @@ def readEmails():
                                     attachment_id = msg['payload']['parts'][1]['parts'][0]['body']['attachmentId']
                                     attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
                                     data = attachment.get("data")
-                                    data = formatClubSummaryData(urlsafe_b64decode(data))
-                                    wash[0] = [data, formatWashconnectDate(date)]
+                                    members = formatClubSummaryData(urlsafe_b64decode(data))
+                                    wash['club'] = {"date": formatWashconnectDate(date), "members": members} 
                                     #Set Email as read and then move to trash
                                     msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
                                     msg = service.users().messages().trash(userId='me', id=message['id']).execute()
-
                                 if "Shift Register Cube was executed at" in subject:
                                     attachment_id = msg['payload']['parts'][1]['parts'][0]['body']['attachmentId']
                                     attachment = service.users().messages().attachments().get(id=attachment_id, userId='me', messageId=message['id']).execute()
                                     data = attachment.get("data")
-                                    # data = base64.urlsafe_b64decode(data.encode('UTF-8'))
-                                    # print(data)
-                                    # tables = pd.read_csv(io.BytesIO(data), sep=',', encoding='utf-8', on_bad_lines='skip', quoting=csv.QUOTE_NONE, quotechar='"') 
-                                    # print(tables)
-                                    data = formatShiftRegisterData(urlsafe_b64decode(data))
-                                    wash[1] = [data, formatWashconnectDate(date)]
+                                    data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                                    tables = pd.read_csv(io.BytesIO(data), sep=',', header=None, names=list(range(25))).dropna(axis='columns', how='all')
+                                    washesSold = getValueFromDF(tables, 'Ultimate', 9, int) + getValueFromDF(tables, 'Works', 9, int) + getValueFromDF(tables, 'Express', 9, int)
+                                    washesRedeemed = getValueFromDF(tables, 'Club Unlimited Redeemed', 9, int)
+                                    membershipsSold = getValueFromDF(tables, 'Total Sold', 16, int)
+                                    totalSales = getValueFromDF(tables, 'Total Sales:', 0, str)
+                                    paidAtPump = getValueFromDF(tables, 'Paid in store', 16, float, 2)
+                                    print(f"Paid at pump: {paidAtPump}")
+                                    wash['reg'] = {"date":  formatWashconnectDate(date), "sales": formatCurrency(totalSales), "washesSold": washesSold, "washesRedeemed": washesRedeemed, "membershipsSold": membershipsSold, "paidAtPump": paidAtPump}
+                                    #Quantity of carwash memberships purchased + individual carwashes purchased
                                     #Set Email as read and then move to trash
                                     msg  = service.users().messages().modify(userId='me', id=message['id'], body={'removeLabelIds': ['UNREAD']}).execute()
                                     msg = service.users().messages().trash(userId='me', id=message['id']).execute()
-                                if((wash[0][0] != -1 and wash[1][0] != -1) and (wash[0][1] is not None and wash[1][1] is not None) and (wash[0][1] == wash[1][1])):
+                                if(wash != {} and wash['club']['date'] == wash['reg']['date']):
                                     #Upsert into DB
-                                    # pass
-                                    dbObj.upsertCarwashData([wash[0][0], wash[1][0]], wash[0][1])
+                                    print(wash)
+                                    dbObj.upsertCarwashData(wash)
+                                    dbObj.insertHourlyCarwashData(wash)
+                                    wash = {}
                             except BaseException as error:
                                 print("Error inserting Car wash data: " + str(error))
                         elif values['value'] == '"admin@rsmgt.net" <admin@rsmgt.net>':

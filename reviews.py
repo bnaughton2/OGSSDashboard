@@ -12,9 +12,9 @@ def fetchReviews():
     r1 = requests.get(oilUrl)
     r2 = requests.get(gasUrl)
     r3 = requests.get(washUrl)
-    print(r1 + ' | ' + r1.content)
-    print(r2 + ' | ' + r2.content)
-    print(r3 + ' | ' + r3.content)
+    # print(str(r1) + ' | ' + str(r1.content))
+    # print(str(r2) + ' | ' + str(r2.content))
+    print(str(r3) + ' | ' + str(r3.content))
 
     if r1.ok and r2.ok and r3.ok:
         print("In if statement")
@@ -40,8 +40,8 @@ def main():
         data = fetchReviews()
         if data != {}:
             dbObj.insertReviewData(data, now)
-    except:
-        print("Something went wrong in reviews.py")
+    except BaseException as error:
+        print("Something went wrong in reviews.py | " + str(error))
     finally:
         dbObj.closeDB()
 

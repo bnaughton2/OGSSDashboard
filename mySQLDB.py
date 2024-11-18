@@ -28,6 +28,25 @@ class DB:
         except mysql.connector.Error as error:
             print("Failed to insert into MySQL table {}".format(error))
 
+    def insertDamageData(self, data, date):
+        try:
+            cursor = self.db.cursor()
+            d = datetime.strptime(date, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
+            mySql_insert_query = """INSERT INTO Damages (id, date, department, cost, updatedOn, updatedBy, addedOn, addedBy) 
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s) """
+
+            updatedOn=addedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            updatedBy=addedBy = "OGSS Web Server"
+            id = str(uuid.uuid4())
+            record = (id, date, data['dept'], data['amount'], updatedOn, updatedBy, addedOn, addedBy)
+            cursor.execute(mySql_insert_query, record)
+            self.db.commit()
+            print("Record inserted successfully into Damages table")
+
+        except mysql.connector.Error as error:
+            print("Failed to insert into MySQL table {}".format(error))
+
+
     def insertWaitTimeData(self, data):
         try:
             recentWait = self.selectRecentWaitTimesForDepartment(str(data['line']))[3]
@@ -49,6 +68,25 @@ class DB:
 
         except mysql.connector.Error as error:
             print("Failed to insert into MySQL table {}".format(error))
+
+
+    def insertHourlyCarwashData(self, data):
+        try:
+            cursor = self.db.cursor()
+            mySql_insert_query = """INSERT INTO CarwashHourly (id, date, washMembers, washSales, washesSold, washesRedeemed, membershipsSold, washMargin, updatedOn, updatedBy, addedOn, addedBy) 
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+
+            updatedOn=addedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            updatedBy=addedBy = "OGSS Web Server"
+            storeMargin = self.selectValueFromAppParams('wash')
+            id = str(uuid.uuid4())
+            record = (id, data['club']['date'], data['club']['members'], data['reg']['sales'], data['reg']['washesSold'], data['reg']['washesRedeemed'], data['reg']['membershipsSold'], storeMargin, updatedOn, updatedBy, addedOn, addedBy)
+            cursor.execute(mySql_insert_query, record)
+            self.db.commit()
+            print("Record inserted successfully into Carwash Hourly table")
+        except mysql.connector.Error as error:
+            print("Failed to insert into MySQL table {}".format(error))
+
 
     def upsertRealTimeOilData(self, data, date):
         try:
@@ -80,6 +118,7 @@ class DB:
 
         except mysql.connector.Error as error:
             print("Failed to insert into MySQL table {}".format(error))
+
 
     def upsertFuelSalesData(self, data, date):
         try:
@@ -114,16 +153,16 @@ class DB:
             print("Failed to insert into MySQL table {}".format(error))
 
             
-    def upsertStoreSalesData(self, data, date):
+    def upsertStoreSalesData(self, data, transactions, date):
         try:
             cursor = self.db.cursor()
             select = self.selectStoreSalesOnDate(date)
             if select != None:
-                mySql_insert_query = """UPDATE StoreSales SET storeSales = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
+                mySql_insert_query = """UPDATE StoreSales SET storeSales = %s, transactions = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
                 if (data > float(select[2])):
                     updatedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                     updatedBy = "OGSS Web Server"
-                    record = (data, updatedOn, updatedBy, select[0])
+                    record = (data, transactions, updatedOn, updatedBy, select[0])
                     cursor.execute(mySql_insert_query, record)
                     self.db.commit()
                     print("Record updated successfully into StoreSales table")
@@ -131,14 +170,14 @@ class DB:
                     print("Store Sales record up to date already")
             else:
                 recent = self.selectRecentStoreSales()
-                mySql_insert_query = """INSERT INTO StoreSales (id, date, storeSales, storeMembers, memberSales, storeMargin, updatedOn, updatedBy, addedOn, addedBy) 
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+                mySql_insert_query = """INSERT INTO StoreSales (id, date, storeSales, storeMembers, memberSales, transactions, storeMargin, updatedOn, updatedBy, addedOn, addedBy) 
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
 
                 updatedOn=addedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 updatedBy=addedBy = "OGSS Web Server"
                 storeMargin = self.selectValueFromAppParams('store')
                 id = str(uuid.uuid4())
-                record = (id, date, data, recent[4], 0, storeMargin, updatedOn, updatedBy, addedOn, addedBy)
+                record = (id, date, data, recent[4], 0, transactions, storeMargin, updatedOn, updatedBy, addedOn, addedBy)
                 cursor.execute(mySql_insert_query, record)
                 self.db.commit()
                 print("Record inserted successfully into StoreSales table")
@@ -164,30 +203,30 @@ class DB:
         except mysql.connector.Error as error:
             print("Failed to insert into MySQL table {}".format(error))
 
-    def upsertCarwashData(self, data, date):
+    def upsertCarwashData(self, data):
         try:
             cursor = self.db.cursor()
-            select = self.selectWashDataOnDate(date)
+            select = self.selectWashDataOnDate(data['club']['date'])
             if select != None:
-                mySql_insert_query = """UPDATE Carwash SET washMembers = %s, washSales = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
-                if (data[0] > float(select[2]) or data[1] > float(select[3])):
+                mySql_insert_query = """UPDATE Carwash SET washMembers = %s, washSales = %s, washesSold = %s, washesRedeemed = %s, membershipsSold = %s, paidAtPump = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
+                if (data['club']['members'] > float(select[2]) or data['reg']['sales'] > float(select[3])):
                     updatedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                     updatedBy = "OGSS Web Server"
-                    record = (data[0], data[1], updatedOn, updatedBy, select[0])
+                    record = ( data['club']['members'], data['reg']['sales'], data['reg']['washesSold'], data['reg']['washesRedeemed'], data['reg']['membershipsSold'], data['reg']['paidAtPump'], updatedOn, updatedBy, select[0])
                     cursor.execute(mySql_insert_query, record)
                     self.db.commit()
                     print("Record updated successfully into Carwash table")
                 else:
                     print("Carwash record up to date already")
             else:
-                mySql_insert_query = """INSERT INTO Carwash (id, date, washMembers, washSales, washMargin, updatedOn, updatedBy, addedOn, addedBy) 
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
+                mySql_insert_query = """INSERT INTO Carwash (id, date, washMembers, washSales, washesSold, washesRedeemed, membershipsSold, paidAtPump, washMargin, updatedOn, updatedBy, addedOn, addedBy) 
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
 
                 updatedOn=addedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 updatedBy=addedBy = "OGSS Web Server"
                 storeMargin = self.selectValueFromAppParams('wash')
                 id = str(uuid.uuid4())
-                record = (id, date, data[0], data[1], storeMargin, updatedOn, updatedBy, addedOn, addedBy)
+                record = (id, data['club']['date'], data['club']['members'], data['reg']['sales'], data['reg']['washesSold'], data['reg']['washesRedeemed'], data['reg']['membershipsSold'], data['reg']['paidAtPump'], storeMargin, updatedOn, updatedBy, addedOn, addedBy)
                 cursor.execute(mySql_insert_query, record)
                 self.db.commit()
                 print("Record inserted successfully into Carwash table")
@@ -200,22 +239,24 @@ class DB:
             cursor = self.db.cursor()
             select = self.selectRecentScorecard()
             date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            if select != None:
-                mySql_insert_query = """UPDATE Scorecard SET csaToday = %s, csaMonthly = %s, prodToday = %s, prodMonthly = %s, store1Today = %s, store1Monthly = %s, store2Today = %s, store2Monthly = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
+            date = datetime.strptime(date, "%Y-%m-%d").date()
+            if date == select[1]:
+                mySql_insert_query = """UPDATE Scorecard SET csaToday = %s, csaWeekly = %s, csaMonthly = %s, prodToday = %s, prodWeekly = %s, prodMonthly = %s, 
+                store1Today = %s, store1Weekly = %s, store1Monthly = %s, store2Today = %s, store2Weekly = %s, store2Monthly = %s, updatedOn = %s, updatedBy = %s WHERE id = %s"""
                 updatedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 updatedBy = "OGSS Web Server"
-                record = (data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], updatedOn, updatedBy, select[0])
+                record = (data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], updatedOn, updatedBy, select[0])
                 cursor.execute(mySql_insert_query, record)
                 self.db.commit()
                 print("Record updated successfully into Scorecard table")
             else:
-                mySql_insert_query = """INSERT INTO Scorecard (id, date, csaToday, csaMonthly, prodToday, prodMonthly, store1Today, store1Monthly, store2Today, store2Monthly, updatedOn, updatedBy, addedOn, addedBy) 
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+                mySql_insert_query = """INSERT INTO Scorecard (id, date, csaToday, csaWeekly, csaMonthly, prodToday, prodWeekly, prodMonthly, store1Today, store1Weekly, store1Monthly, store2Today, store2Weekly, store2Monthly, updatedOn, updatedBy, addedOn, addedBy) 
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,  %s, %s, %s, %s) """
 
                 updatedOn=addedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 updatedBy=addedBy = "OGSS Web Server"
                 id = str(uuid.uuid4())
-                record = (id, date, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], updatedOn, updatedBy, addedOn, addedBy)
+                record = (id, date, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], updatedOn, updatedBy, addedOn, addedBy)
                 cursor.execute(mySql_insert_query, record)
                 self.db.commit()
                 print("Record inserted successfully into Scorecard table")
@@ -504,6 +545,18 @@ class DB:
             result = cursor.fetchone()
             cursor.reset()
             return result[ind]
+        except mysql.connector.Error as error:
+            print("Failed to select from MySQL table {}".format(error))
+
+    def changeLastUpdatedCurrentTime(self):
+        try:
+            cursor = self.db.cursor()
+            mySql_update_query = """UPDATE AppParams SET lastUpdated = %s WHERE ID = %s"""
+            updatedOn = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            record = (updatedOn, 1)
+            cursor.execute(mySql_update_query, record)
+            self.db.commit()
+            print("App Params last updated changed successfully")
         except mysql.connector.Error as error:
             print("Failed to select from MySQL table {}".format(error))
 

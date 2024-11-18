@@ -40,7 +40,7 @@ try:
 
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id,
-                                range='Ryan Sheet!G10:H10').execute()
+                                range='Price Decision!G10:H10').execute()
     values = result.get('values', [])
 
     if not values:

@@ -134,12 +134,27 @@ def getStoreData():
         driver.maximize_window()
         time.sleep(10)
         members = driver.find_element('xpath', '//*[@id="number-card-0"]/div[2]/div/div[2]')
-        vals[0] = int(float(members.get_attribute('innerHTML')))
+        vals[0] = int(str(members.get_attribute('innerHTML')).replace(',',''))
         sales = driver.find_element('xpath', '//*[@id="dashboard-graph-heading-2"]/div[2]/div[1]')
         vals[1] = float(sales.get_attribute('innerHTML').strip("$"))
     except BaseException as error:
         print("Error retrieving store members/sales: " + str(error))
     return vals
+
+def getStoreTransactions():
+    transactions = 0
+    try:
+        d = openKPIDashboard(driver)
+        d.get('https://sscsta.sscsinc.com/TransactionAnalysis.App/#!/storestats/?selectedSites=007151001')
+        time.sleep(2)
+        button = d.find_element('xpath', '//button[contains(.,"Submit")]')
+        button.send_keys('\n')
+        time.sleep(2)
+        item = d.find_element(By.CSS_SELECTOR, '.ng-scope > .alignRight:nth-child(3)')
+        transactions = int(item.text)
+    except BaseException as error:
+        print("Error retrieving store transactions: " + str(error))
+    return transactions
 
 def main():
     try:
@@ -150,6 +165,7 @@ def main():
         fuelSales = getDailyFuelSales()
         fuelVol = getDailyFuelVolume()
         storeData = getStoreData()
+        transactions = getStoreTransactions()
         if(fuelSales[0] != 0 and fuelSales[1] != '') and (fuelVol[0] != 0 and fuelVol[1] != ''):
             if(fuelSales[1] == fuelVol[1]):
                 data = [fuelSales[0], fuelVol[0]]
@@ -159,11 +175,12 @@ def main():
             data = [store[0], storeData[0], storeData[1]]
             date = store[1]
             print(data)
-            dbObj.upsertStoreSalesData(store[0], date)
+            dbObj.upsertStoreSalesData(store[0], transactions, date)
             dbObj.updateStoreMembersData([storeData[0], storeData[1]], date)
     except:
         print("Something went wrong in sel.py")
     finally:
+        dbObj.changeLastUpdatedCurrentTime()
         dbObj.closeDB()
         driver.quit()
 
